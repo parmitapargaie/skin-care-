@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Skin Care Analyzer</title>
+  <style>
+    :root{ --bg:#f7f8fb; --card:#ffffff; --accent:#0f62fe; --muted:#6b7280}
+    body{font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; background:var(--bg); margin:0; padding:32px; color:#111}
+    .wrap{max-width:900px;margin:0 auto}
+    header{display:flex;align-items:center;gap:16px;margin-bottom:20px}
+    h1{font-size:20px;margin:0}
+    .card{background:var(--card);border-radius:12px;padding:18px;box-shadow:0 6px 18px rgba(15,23,42,0.06)}
+    .controls{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+    input[type=file]{padding:8px}
+    button{background:var(--accent);color:#fff;border:0;padding:10px 14px;border-radius:8px;cursor:pointer}
+    button:disabled{opacity:0.5;cursor:not-allowed}
+    .preview{display:flex;gap:18px;margin-top:18px;align-items:flex-start}
+    .preview img{max-width:320px;border-radius:10px;box-shadow:0 6px 14px rgba(2,6,23,0.06)}
+    .result{flex:1}
+    .result h2{margin:0 0 8px 0;font-size:16px}
+    .tags{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+    .tag{padding:6px 8px;background:#eef2ff;border-radius:999px;font-size:13px}
+    .advice{margin-top:8px}
+    .advice ul{margin:6px 0 0 18px}
+    .disclaimer{margin-top:12px;font-size:13px;color:var(--muted)}
+    footer{margin-top:18px;font-size:13px;color:var(--muted)}
+    .small{font-size:13px;color:var(--muted)}
+    .metric{font-weight:600}
+    pre{background:#0f1724;color:#fff;padding:10px;border-radius:8px;overflow:auto}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="card" style="padding:12px 14px;display:inline-block">Skin Care Analyzer</div>
+      <div>
+        <h1>Upload a photo of your facial skin — get simple product suggestions</h1>
+        <div class="small">Client-side analysis only. Not a medical diagnosis. See disclaimer below.</div>
+      </div>
+    </header>
+
+    <div class="card">
+      <label class="small">Choose an image (front-facing, well-lit, avoid heavy makeup):</label>
+      <div class="controls">
+        <input id="file" type="file" accept="image/*" />
+        <button id="analyzeBtn" disabled>Analyze</button>
+        <button id="resetBtn" type="button">Reset</button>
+      </div>
+
+      <div class="preview">
+        <div>
+          <img id="previewImg" alt="preview" src="" style="display:none;max-height:360px;object-fit:cover;" />
+          <canvas id="hiddenCanvas" style="display:none"></canvas>
+        </div>
+
+        <div class="result">
+          <h2>Analysis summary</h2>
+          <div id="tags" class="tags"></div>
+          <div id="metrics" class="small"></div>
+          <div id="advice" class="advice"></div>
+          <div class="disclaimer">
+            <strong>Disclaimer:</strong> This tool performs simple pixel-based heuristics (color/texture) to give general skin-care tips. It does not provide medical diagnosis. For persistent, severe, or painful conditions consult a dermatologist.
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <footer class="small">If you want a more accurate result, I can show how to connect this webpage to a trained ML model (server or cloud) for clinical-grade classification.</footer>
+  </div>
+
+<script>
+// Basic client-side skin heuristics. These are approximate and intentionally simple.
+const fileInput = document.getElementById('file');
+const previewImg = document.getElementById('previewImg');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const resetBtn = document.getElementById('resetBtn');
+const tagsEl = document.getElementById('tags');
+const adviceEl = document.getElementById('advice');
+const metricsEl = document.getElementById('metrics');
+const canvas = document.getElementById('hiddenCanvas');
+const ctx = canvas.getContext('2d');
+
+let loadedImage = null;
+
+fileInput.addEventListener('change', e => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return resetAll();
+  const url = URL.createObjectURL(file);
+  previewImg.src = url;
+  previewImg.style.display = 'block';
+  analyzeBtn.disabled = false;
+  loadedImage = file;
+});
+
+resetBtn.addEventListener('click', resetAll);
+
+analyzeBtn.addEventListener('click', () => {
+  if (!previewImg.src) return;
+  analyzeBtn.disabled = true;
+  runAnalysis();
+});
+
+function resetAll(){
+  fileInput.value = '';
+  previewImg.src = '';
+  previewImg.style.display = 'none';
+  analyzeBtn.disabled = true;
+  tagsEl.innerHTML = '';
+  adviceEl.innerHTML = '';
+  metricsEl.innerHTML = '';
+}
+
+function runAnalysis(){
+  // draw image to canvas sized down for speed
+  const W = 300;
+  const img = previewImg;
+  const ratio = img.naturalWidth / img.naturalHeight || 1;
+  const H = Math.round(W / ratio);
+  canvas.width = W; canvas.height = H;
+  ctx.drawImage(img, 0, 0, W, H);
+  const data = ctx.getImageData(0,0,W,H).data;
+
+  // compute simple metrics
+  let rSum=0,gSum=0,bSum=0;
+  let brightSum=0; let count=0;
+  let redDominantPixels=0; // possible irritation/acne
+  let darkPixels=0; // possible hyperpigmentation/dryness
+  let variance=0;
+
+  // compute mean brightness for variance
+  for(let i=0;i<data.length;i+=4){
+    const r=data[i], g=data[i+1], b=data[i+2];
+    const bright = (r+g+b)/3;
+    rSum+=r; gSum+=g; bSum+=b;
+    brightSum+=bright;
+    count++;
+  }
+  const meanBright = brightSum/count;
+
+  // second pass: variance and thresholds
+  for(let i=0;i<data.length;i+=4){
+    const r=data[i], g=data[i+1], b=data[i+2];
+    const bright = (r+g+b)/3;
+    variance += Math.pow(bright - meanBright, 2);
+
+    if (r > g + 18 && r > b + 18 && r > 120) redDominantPixels++;
+    if (bright < 80) darkPixels++;
+  }
+  variance = variance / count;
+
+  const avgR = Math.round(rSum/count);
+  const avgG = Math.round(gSum/count);
+  const avgB = Math.round(bSum/count);
+  const avgBright = Math.round(meanBright);
+  const redRatio = redDominantPixels / count;
+  const darkRatio = darkPixels / count;
+
+  // heuristics
+  const tags = [];
+  const adv = [];
+
+  // Oiliness / shine detection (higher brightness and lower variance)
+  if (avgBright > 140 && variance < 800){
+    tags.push('Likely: Oily or Combination (shine)');
+    adv.push('<li>Use oil-controlling cleansers (salicylic acid 0.5–2%), lightweight oil-free moisturizers.</li>');
+    adv.push('<li>Clay masks once weekly and non-comedogenic sunscreens.</li>');
+  }
+
+  // Dryness detection (darker, low brightness and higher variance with textured skin)
+  if (avgBright < 100 || variance > 1500){
+    tags.push('Likely: Dry or Dehydrated');
+    adv.push('<li>Use gentle, hydrating cleansers (cream/oil cleansers), and moisturizers with hyaluronic acid, glycerin, ceramides.</li>');
+    adv.push('<li>Avoid harsh exfoliants; try occlusive at night (petrolatum / centella asiatica creams).</li>');
+  }
+
+  // Redness / inflammation
+  if (redRatio > 0.01){ // >1% of pixels strongly red
+    tags.push('Signs: Redness / Inflammation');
+    adv.push('<li>Soothing ingredients: niacinamide, aloe vera, panthenol. Avoid strong actives until irritation calms.</li>');
+    adv.push('<li>If painful or severe, consult a dermatologist—may be rosacea or inflammatory acne.</li>');
+  }
+
+  // Acne-like texture detection (clustered red + darker spots)
+  if (redRatio > 0.02 || darkRatio > 0.06){
+    tags.push('Possible: Acne or Post-inflammatory spots');
+    adv.push('<li>Consider salicylic acid for unclogging, benzoyl peroxide for inflammatory lesions (patch test first).</li>');
+    adv.push('<li>Use non-comedogenic moisturizers and broad-spectrum sunscreen daily.</li>');
+  }
+
+  // Hyperpigmentation
+  if (darkRatio > 0.12 && avgBright<120){
+    tags.push('Signs: Hyperpigmentation / Uneven tone');
+    adv.push('<li>Use vitamin C (stable formulation), niacinamide. Consistent sunscreen is crucial to prevent worsening.</li>');
+  }
+
+  // If nothing flagged, generic healthy suggestions
+  if (tags.length === 0){
+    tags.push('No obvious dominant issue detected — maintenance routine suggested');
+    adv.push('<li>Gentle cleanser, lightweight moisturizer, and daily broad-spectrum SPF 30+.</li>');
+    adv.push('<li>Introduce actives (vitamin C, retinoids, acids) slowly and patch test.</li>');
+  }
+
+  // Render tags and adv
+  tagsEl.innerHTML = tags.map(t => `<div class="tag">${t}</div>`).join('');
+  adviceEl.innerHTML = '<h3>Suggested routine</h3><ul>' + adv.join('\n') + '</ul>' +
+    '<div style="margin-top:10px" class="small"><strong>Quick tips:</strong> Patch test new products, avoid mixing strong acids with retinoids, always use sunscreen.</div>';
+
+  metricsEl.innerHTML = `<div>Average color (R,G,B): <span class="metric">${avgR}, ${avgG}, ${avgB}</span></div>`+
+                       `<div>Average brightness: <span class="metric">${avgBright}</span> · Brightness variance: <span class="metric">${Math.round(variance)}</span></div>`+
+                       `<div>Red-dominant pixel ratio: <span class="metric">${(redRatio*100).toFixed(2)}%</span></div>`;
+
+  analyzeBtn.disabled = false;
+}
+
+// OPTIONAL: Example function showing how you'd upload the image to a server/ML model for better results.
+// This is commented out because you may not have a server ready. If you do, uncomment and replace `UPLOAD_URL`.
+/*
+async function uploadToModel(file){
+  const UPLOAD_URL = 'https://your-server.example.com/analyze-skin';
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await fetch(UPLOAD_URL, { method: 'POST', body: fd });
+  const json = await res.json();
+  // expected json: { skin_type: 'oily', concerns: ['acne','pigmentation'], recommendations: [...] }
+  // then render recommendations similarly
+}
+*/
+
+</script>
+</body>
+</html>
